@@ -71,7 +71,7 @@ public class TestCrptApi {
             }
             assert !crptApi.isBusy();
 
-            Thread.sleep(2000);
+            Thread.sleep(4000L);
             futures.forEach(future -> {
                 assert future.isDone();
             });

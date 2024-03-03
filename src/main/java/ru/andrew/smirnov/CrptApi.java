@@ -16,16 +16,50 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import javax.net.ssl.SSLSession;
 
 public class CrptApi {
+    /**
+     * Endpoint for sending requests
+     */
     private static final URI CRYPTA_ENDPOINT = URI.create("https://ismp.crpt.ru/api/v3/lk/documents/create");
+
+    /**
+     * Maximum thread count
+     */
+    private static final int MAX_THREAD_COUNT = 10000;
+
+    /**
+     * Secret token for api, in future will be replaced for valid token
+     */
     private static final String API_TOKEN = "Bearer secret_token";
+
+    /**
+     * TimeUnit in which will be limited rate
+     */
     private final TimeUnit timeUnit;
 
+    /**
+     * Semaphore for rate limiting
+     */
     private final Semaphore semaphore;
 
+
+    /**
+     * Executor service for submitting actions to release semaphore
+     */
     private final ExecutorService executorService;
 
+
+    /**
+     * Logger for logging errors
+     */
     private final Logger LOG = Logger.getLogger(CrptApi.class.getName());
 
+
+    /**
+     * Creates instance of CrptApi
+     * Initializes semaphore with maximum rate of requestLimit
+     * @param timeUnit timeUnit in which will be limited rate
+     * @param requestLimit limit of rate in timeUnit
+     */
     public CrptApi(TimeUnit timeUnit, int requestLimit) {
         if (Objects.isNull(timeUnit)) {
             throw new IllegalArgumentException("Provided TimeUnit is null!");
@@ -38,14 +72,24 @@ public class CrptApi {
         this.executorService = Executors.newCachedThreadPool();
     }
 
+
+    /**
+     *
+     * @param document document to add in "Честный знак"
+     * @return ApiResponse that implements HttpResponse
+     */
     public ApiResponse createDocument(Document document) {
+        int currentThreadCount = ((ThreadPoolExecutor) executorService).getPoolSize();
+        if (currentThreadCount > MAX_THREAD_COUNT) {
+            return new ApiResponse(429, "Too many requests");   // return 429 if too many threads
+        }
         try {
-            semaphore.acquire();
+            semaphore.acquire();    // try to acquire semaphore
         } catch (InterruptedException e) {
             LOG.warning("Interruption while semaphore.acquire():\n" + Arrays.toString(e.getStackTrace()));
             throw new RuntimeException(e);
         }
-        executorService.submit(() -> {
+        executorService.submit(() -> {      // submitting actions to release semaphore in future
             try {
                 Thread.sleep(timeUnit.toMillis(1));
             } catch (InterruptedException e) {
@@ -55,11 +99,11 @@ public class CrptApi {
             semaphore.release();
         });
 
-        if (Objects.isNull(document)) {
+        if (Objects.isNull(document)) {     // validating document
             return new ApiResponse(500, "Provided document is null!");
         }
 
-        HttpRequest request = HttpRequest.newBuilder()
+        HttpRequest request = HttpRequest.newBuilder()  //building request
                 .version(HttpClient.Version.HTTP_1_1)
                 .uri(CRYPTA_ENDPOINT)
                 .header("Content-Type", "application/json")
@@ -71,7 +115,7 @@ public class CrptApi {
         HttpClient client = HttpClient.newHttpClient();
 
         try {
-            var response = client.send(request,
+            var response = client.send(request,             //sending to api
                     HttpResponse.BodyHandlers.ofString());
             return new ApiResponse(200, response);
         } catch (IOException | InterruptedException e) {
@@ -81,10 +125,21 @@ public class CrptApi {
         }
     }
 
+    /**
+     * Checks if CrptApi is busy
+     * Used mostly for debugging and test purpose
+     * @return true if we can't send request to "Честный знак", false otherwise
+     */
     public boolean isBusy() {
         return semaphore.availablePermits() == 0;
     }
 
+    /**
+     * My own class that implements HttpResponse
+     * @param statusCode
+     * @param body
+     * @param response
+     */
     record ApiResponse(
             int statusCode,
             String body,
@@ -99,47 +154,94 @@ public class CrptApi {
             this(statusCode, "", Optional.of(response));
         }
 
+        /**
+         * Returns status code
+         * @return statusCode
+         */
         @Override
         public int statusCode() {
             return statusCode;
         }
 
+        /**
+         * Returns HttpRequest
+         * @return request if exists else returns null
+         */
         @Override
         public HttpRequest request() {
             return response.map(HttpResponse::request).orElse(null);
         }
 
+        /**
+         * Returns HttpResponse
+         * @return Optional.empty()
+         */
         @Override
         public Optional<HttpResponse<String>> previousResponse() {
             return Optional.empty();
         }
 
+        /**
+         * Returns headers of this response
+         * @return headers of HttpResponse if it's present, null otherwise
+         */
         @Override
         public HttpHeaders headers() {
             return response.map(HttpResponse::headers).orElse(null);
         }
 
+        /**
+         * Returns body of response
+         * @return body of response if it's present, else body of ApiResponse
+         */
         @Override
         public String body() {
             return response.map(HttpResponse::body).orElse(body);
         }
 
+        /**
+         * Returns ssl session
+         * @return Optional.empty()
+         */
         @Override
         public Optional<SSLSession> sslSession() {
             return Optional.empty();
         }
 
+        /**
+         * Return URI of response
+         * @return CRYPTA_ENDPOINT
+         */
         @Override
         public URI uri() {
             return CRYPTA_ENDPOINT;
         }
 
+        /**
+         * Returns version of HttpResponse
+         * @return HTTP_1_1 version
+         */
         @Override
         public HttpClient.Version version() {
             return HttpClient.Version.HTTP_1_1;
         }
     }
 
+    /**
+     * Class for document in Api "Честный знак"
+     * @param participantInn
+     * @param docId
+     * @param docStatus
+     * @param docType
+     * @param importRequest
+     * @param ownerInn
+     * @param producerInn
+     * @param productionDate
+     * @param productionType
+     * @param products
+     * @param regDate
+     * @param regNumber
+     */
     record Document(
             String participantInn,
             String docId,
@@ -154,6 +256,18 @@ public class CrptApi {
             Date regDate,
             String regNumber
     ) {
+        /**
+         * Class Product, which used in Document class
+         * @param certificateDocument
+         * @param certificateDocumentDate
+         * @param certificateDocumentNumber
+         * @param ownerInn
+         * @param producerInn
+         * @param productionDate
+         * @param tnvedCode
+         * @param uitCode
+         * @param uituCode
+         */
         record Product(
                 String certificateDocument,
                 Date certificateDocumentDate,
@@ -165,6 +279,10 @@ public class CrptApi {
                 String uitCode,
                 String uituCode
         ) {
+            /**
+             * Method, that returns json object of this Product
+             * @return Map<String, String>, which represents json object
+             */
             public Map<String, String> toJson() {
                 return Map.of(
                         "certificate_document", certificateDocument,
@@ -180,6 +298,11 @@ public class CrptApi {
             }
         }
 
+        /**
+         * Methods for retrieving json representation of Document
+         * Using jackson for serialization
+         * @return String that represents json of Document
+         */
         @Override
         public String toString() {
             ObjectMapper mapper = new ObjectMapper();
